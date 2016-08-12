@@ -1,7 +1,11 @@
 #!/home/srandall/soft/anaconda3/bin/python
 
 # Draw point sources from a logN-logS distribution and add them to an
-# input image file
+# input image file.  Flux units are 10^-14 erg/cm^2/s.  Output image is
+# in cts/s.
+# NOTE: numerical integration and root finding could be done analytically
+# to speed up the code at the expense of generality for the form of dNdS.
+# Should eventually add an option to choose.
 
 import sys
 import argparse
@@ -17,36 +21,42 @@ from astropy.wcs import WCS
 # dN/dS, takes S in 1e-14 erg/cm^2/s
 # returns 10^14 deg^-2  (erg/cm^2/s)^-1
 def dNdS(S, type, band):
+    if not (band == 'fb'):
+        sys.exit('Energy band not supported')
+
     # From Lehmer et al. 2012
     # Change flux units to 1e-14 erg/cm^2/s
-    if band == 'fb':
-        K_agn = 562.2  # 1e14 deg^-2 (erg/cm^2/s)^-1
-        beta1_agn = 1.34
-        beta2_agn = 2.35
+    if type == 'agn':
+        K = 562.2  # 1e14 deg^-2 (erg/cm^2/s)^-1
+        beta1 = 1.34
+        beta2 = 2.35
         f_break = 0.81
+    elif type == 'gal':
+        K = 2.82
+        beta1 = 2.4
+    elif type == 'star':
+        K = 4.07
+        beta1 = 1.55
     else:
-        sys.exit('Energy band not supported')
+        sys.exit('Source type not supported')
     
     # 10^-14 erg cm^-2 s^-1
     S_ref = 1
 
-    if type == 'agn':
-        if S <= f_break:
-            dnds_agn = K_agn*(S/S_ref)**(-1*beta1_agn)
-        else:
-            dnds_agn = K_agn*(f_break/S_ref)**(beta2_agn - beta1_agn)*(S/S_ref)**(-1*beta2_agn)
-        return dnds_agn
+    if type == 'agn' and S > f_break:
+        dnds = K*(f_break/S_ref)**(beta2 - beta1)*(S/S_ref)**(-1*beta2)
     else:
-        sys.exit('Type not supported')
+        dnds = K*(S/S_ref)**(-1*beta1)
+
+    return dnds
 
 def dNdS_draw(S_draw, rand, norm, type, band):
-#    return ((integrate.quad(dNdS, S_min, S_draw, args=(type,band))[0])/norm - rand)
     return ((integrate.quad(dNdS, S_draw, np.inf, args=(type,band))[0])/norm - rand)
 
 
 def main():
     # exposure time, ksec
-    t_exp = 4000
+    t_exp = 50
     # effective area, cm^2
     eff_area = 40000
     # mean photon energy, keV
@@ -55,14 +65,19 @@ def main():
     fov = 20
     sources = []
     inimage = 'foo.fits'
-    outimage = 'goo.fits'
+    outimage = 'all_types_50ks.fits'
     draw_srcs = True
     image_srcs = True
+    types = ['agn', 'gal', 'star']
 
     eph_mean_erg = eph_mean*1.6e-9
 
+    # integrate down to a flux where we expect to have roughly one photon
+    # during the exposure
     S_min = eph_mean_erg/(t_exp*1000*eff_area)
     S_min = S_min/1e-14
+
+    print("Flux limit is",S_min*1e-14)
 
     fov_area = fov**2
 
@@ -85,27 +100,28 @@ def main():
         else:
             sys.exit('Image CUNIT1 type not recognized')
 
-#    test = 1e14*dNdS(S_min, 'agn', 'fb')
-#    print(test)
-
-
     # Calculate the number of sources with S>S_min in the FOV
+    for type in types:
+        # dNdS returns 10^14 deg^-2 (erg/cm^2/s)^-1, but we get a factor of 
+        # 10^-14 from dS in integral, so they cancel
+        n_srcs = integrate.quad(dNdS, S_min, np.inf, args=(type,'fb'))[0]
+        # scale to the FOV
+        n_srcs_fov = n_srcs*fov_area/60**2
+        print("Expect sources", n_srcs_fov, "of type",type,"in field.")
 
-    # dNdS returns 10^14 deg^-2 (erg/cm^2/s)^-1, but we get a factor of 
-    # 10^-14 from dS in integral, so they cancel
-    n_srcs = integrate.quad(dNdS, S_min, np.inf, args=('agn','fb'))[0]
-    # scale to the FOV
-    n_srcs_fov = n_srcs*fov_area/60**2
-    print("Expect", n_srcs_fov, "sources per field.")
+        # draw a random distribution of sources
+        n14 = 0
+        if draw_srcs:
+            print("Drawing sources from distribution...")
+            for i in range(0,int(round(n_srcs_fov,0))):
+                rand = random.random()
+                S = optimize.brentq(dNdS_draw, S_min, 1000, args=(rand, n_srcs, type, 'fb'))
+                sources.append(S)
+                if S > 1:
+                    n14 += 1
+        print(integrate.quad(dNdS, 1, np.inf, args=(type,'fb'))[0]*fov_area/60**2, n14)
 
-    # draw a random distribution of sources
-    if draw_srcs:
-        print("Drawing sources from distribution...")
-        for i in range(0,int(round(n_srcs_fov,0))):
-            rand = random.random()
-            S = optimize.brentq(dNdS_draw, S_min, 1000, args=(rand, n_srcs, 'agn', 'fb'))
-            sources.append(S)
-            
+
     print("Placing sources in image...")
     if image_srcs:
         for sflux in sources:
