@@ -56,7 +56,7 @@ def dNdS_draw(S_draw, rand, norm, type, band):
 
 def main():
     # exposure time, ksec
-    t_exp = 50
+    t_exp = 5
     # effective area, cm^2
     eff_area = 40000
     # mean photon energy, keV
@@ -65,7 +65,7 @@ def main():
     fov = 20
     sources = []
     inimage = 'foo.fits'
-    outimage = 'all_types_50ks.fits'
+    outimage = 'moo.fits'
     draw_srcs = True
     image_srcs = True
     types = ['agn', 'gal', 'star']
@@ -87,7 +87,7 @@ def main():
         try:
             hdus = fits.open(inimage)
         except:
-            sys.exit('There was an error reading the input file', infile)
+            sys.exit('There was an error reading the input image')
 
         xlen = hdus[0].header['naxis1']
         ylen = hdus[0].header['naxis2']
@@ -107,20 +107,15 @@ def main():
         n_srcs = integrate.quad(dNdS, S_min, np.inf, args=(type,'fb'))[0]
         # scale to the FOV
         n_srcs_fov = n_srcs*fov_area/60**2
-        print("Expect sources", n_srcs_fov, "of type",type,"in field.")
+        print("Expect", n_srcs_fov, "source of type",type,"in the field.")
 
         # draw a random distribution of sources
-        n14 = 0
         if draw_srcs:
             print("Drawing sources from distribution...")
             for i in range(0,int(round(n_srcs_fov,0))):
                 rand = random.random()
                 S = optimize.brentq(dNdS_draw, S_min, 1000, args=(rand, n_srcs, type, 'fb'))
                 sources.append(S)
-                if S > 1:
-                    n14 += 1
-        print(integrate.quad(dNdS, 1, np.inf, args=(type,'fb'))[0]*fov_area/60**2, n14)
-
 
     print("Placing sources in image...")
     if image_srcs:
